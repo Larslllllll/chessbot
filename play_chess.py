@@ -1,0 +1,148 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+from pathlib import Path
+
+from playwright.async_api import async_playwright
+
+from chessbot.engine import find_stockfish
+from chessbot.playwright_adapter import ChessComBot, DuolingoChessBot
+
+_SITES = [
+    ("Duolingo", "https://www.duolingo.com/chess-matches"),
+    ("Chess.com", "https://www.chess.com/play/online/new"),
+]
+
+
+async def _menu(title: str, choices: list[str]) -> int:
+    print(f"\n{title}")
+    for i, choice in enumerate(choices, 1):
+        print(f"  {i}. {choice}")
+
+    def _read() -> int:
+        while True:
+            raw = input("> ").strip()
+            if raw.isdigit() and 1 <= int(raw) <= len(choices):
+                return int(raw)
+            print(f"  Please enter 1–{len(choices)}.")
+
+    return await asyncio.get_event_loop().run_in_executor(None, _read)
+
+
+async def _ask_url() -> str:
+    labels = [f"{name}  ({url})" for name, url in _SITES] + ["Custom URL"]
+    choice = await _menu("Select site", labels)
+    if choice <= len(_SITES):
+        return _SITES[choice - 1][1]
+
+    def _read() -> str:
+        while True:
+            raw = input("URL: ").strip()
+            if raw:
+                return raw if "://" in raw else f"https://{raw}"
+            print("  Please enter a URL.")
+
+    return await asyncio.get_event_loop().run_in_executor(None, _read)
+
+
+async def _launch_browser(pw, profile_dir: str):
+    for channel in ("chrome", "msedge"):
+        try:
+            ctx = await pw.chromium.launch_persistent_context(
+                profile_dir,
+                channel=channel,
+                headless=False,
+                viewport={"width": 1280, "height": 900},
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            print(f"[bot] Browser: {channel}")
+            return ctx
+        except Exception as exc:
+            print(f"[bot] {channel} not available: {exc}")
+    raise RuntimeError("Neither Chrome nor Edge found.")
+
+
+async def _play_game(page, url: str, depth: int, time_limit: float) -> None:
+    await page.goto(url, wait_until="domcontentloaded")
+    print("\n[bot] Log in and start a chess game.")
+    print("[bot] Press ENTER when ready...")
+    await asyncio.get_event_loop().run_in_executor(None, input)
+
+    bot: DuolingoChessBot | ChessComBot = (
+        ChessComBot(page) if "chess.com" in url else DuolingoChessBot(page)
+    )
+    await bot.wait_until_ready()
+    await bot.run_loop(depth=depth, time_limit=time_limit)
+
+
+async def _run(depth: int, time_limit: float) -> None:
+    profile_dir = str(Path(__file__).parent / "browser-profile")
+
+    print("\n╔══════════════════════╗")
+    print("║     Chess Bot CLI    ║")
+    print("╚══════════════════════╝")
+    sf = find_stockfish()
+    if sf:
+        print(f"  Engine : Stockfish  ({sf})")
+    else:
+        print(f"  Engine : built-in Python engine (depth {depth})")
+        print("  Tip    : install Stockfish for 2000+ ELO play")
+        print("           winget install Stockfish.Stockfish")
+    print(f"  Time   : {time_limit:.0f}s per move")
+
+    async with async_playwright() as pw:
+        ctx = None
+        url: str | None = None
+
+        while True:
+            choice = await _menu("Main menu", ["Play game", "Quit"])
+            if choice == 2:
+                print("[bot] Bye!")
+                break
+
+            url = await _ask_url()
+
+            if ctx is None:
+                ctx = await _launch_browser(pw, profile_dir)
+
+            while True:
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                try:
+                    await _play_game(page, url, depth, time_limit)
+                except KeyboardInterrupt:
+                    print("\n[bot] Interrupted.")
+
+                post = await _menu(
+                    "Game over",
+                    ["Play again", "Main menu", "Quit"],
+                )
+                if post == 1:
+                    continue
+                elif post == 2:
+                    break
+                else:
+                    print("[bot] Bye!")
+                    await ctx.close()
+                    return
+
+        if ctx:
+            await ctx.close()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Chess bot for Duolingo and Chess.com.")
+    parser.add_argument(
+        "--depth", type=int, default=8,
+        help="Search depth for built-in engine (default: %(default)s, ignored when Stockfish is found).",
+    )
+    parser.add_argument(
+        "--time", type=float, default=0.5,
+        help="Seconds to think per move (default: %(default)s).",
+    )
+    args = parser.parse_args()
+    asyncio.run(_run(args.depth, args.time))
+
+
+if __name__ == "__main__":
+    main()

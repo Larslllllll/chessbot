@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.playwright/
+playwright-report/
+*.egg-info/
+.env
+
+# Build artifacts
+dist/
+build/
+*.spec
+*.spec.bak
+build.ps1
+installer.iss
+install_browser.py
+
+# Tests
+tests/
+pytest.ini
+
+# Claude config
+.claude/
+
+# Runtime artifacts
+browser-profile/
+.playwright-mcp/
+*.png
+*.jpg
+
+# Stockfish binary (install separately)
+StockFish/
