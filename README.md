@@ -61,4 +61,3 @@ requirements.txt
 
 ---
 
-*Vibe-coded mit Claude Code Opus 4.7*
