@@ -6,7 +6,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from chessbot.engine import find_stockfish
+from chessbot.engine import ensure_stockfish, find_stockfish
 from chessbot.playwright_adapter import ChessComBot, DuolingoChessBot
 
 _SITES = [
@@ -82,7 +82,7 @@ async def _run(depth: int, time_limit: float) -> None:
     print("\n╔══════════════════════╗")
     print("║     Chess Bot CLI    ║")
     print("╚══════════════════════╝")
-    sf = find_stockfish()
+    sf = ensure_stockfish()
     if sf:
         print(f"  Engine : Stockfish  ({sf})")
     else:

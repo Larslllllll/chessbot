@@ -8,20 +8,28 @@ import time as _time
 import chess
 import chess.polyglot
 
+_STOCKFISH_URL = (
+    "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
+    "stockfish-windows-x86-64-avx2.zip"
+)
+_LOCAL_ENGINE_DIR = Path(__file__).parent.parent / "engine"
+
 
 # ── Stockfish auto-discovery ──────────────────────────────────────────────────
 
 def find_stockfish() -> str | None:
     import glob
 
-    # 1. PATH (covers winget / chocolatey installs that register on PATH)
+    # 1. Lokal heruntergeladene Version (engine/ neben der exe)
+    for hit in sorted(_LOCAL_ENGINE_DIR.glob("stockfish*.exe"), reverse=True):
+        return str(hit)
+
+    # 2. PATH
     sf = shutil.which("stockfish")
     if sf:
         return sf
 
-    # 2. Glob search in likely install dirs (handles versioned filenames like
-    #    stockfish-windows-x86-64-avx2.exe that winget may drop)
-    # WinGet portable installs land under AppData\Local\Microsoft\WinGet\Packages
+    # 3. WinGet portable install
     winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
     winget_hits = sorted(winget_base.glob("Stockfish.Stockfish_*/stockfish/stockfish*.exe"), reverse=True)
     if winget_hits:
@@ -37,8 +45,53 @@ def find_stockfish() -> str | None:
     ]
     for d in search_dirs:
         for hit in sorted(glob.glob(f"{d}/stockfish*.exe"), reverse=True):
-            return hit  # prefer latest version (alphabetically last)
+            return hit
 
+    return None
+
+
+def ensure_stockfish() -> str | None:
+    """Gibt den Stockfish-Pfad zurück. Lädt die Engine beim ersten Aufruf herunter."""
+    path = find_stockfish()
+    if path:
+        return path
+
+    import io
+    import urllib.request
+    import zipfile
+
+    print("Stockfish nicht gefunden – wird heruntergeladen ...")
+    print(f"Quelle: {_STOCKFISH_URL}")
+
+    try:
+        with urllib.request.urlopen(_STOCKFISH_URL, timeout=60) as resp:
+            total = int(resp.headers.get("Content-Length", 0))
+            data = bytearray()
+            chunk = 1 << 16
+            while True:
+                block = resp.read(chunk)
+                if not block:
+                    break
+                data += block
+                if total:
+                    pct = len(data) * 100 // total
+                    print(f"\r  {pct:3d}%  ({len(data) // 1024} KB)", end="", flush=True)
+        print()
+    except Exception as exc:
+        print(f"Download fehlgeschlagen: {exc}")
+        return None
+
+    _LOCAL_ENGINE_DIR.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        for member in zf.namelist():
+            name = Path(member).name
+            if name.startswith("stockfish") and name.endswith(".exe"):
+                dest = _LOCAL_ENGINE_DIR / name
+                dest.write_bytes(zf.read(member))
+                print(f"Stockfish installiert: {dest}")
+                return str(dest)
+
+    print("Fehler: Kein stockfish*.exe im Archiv gefunden.")
     return None
 
 

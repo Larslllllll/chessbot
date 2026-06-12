@@ -8,7 +8,8 @@ playwright-report/
 .env
 
 # Build artifacts
-dist/
+dist/chessbot/
+dist/install_browser.exe
 build/
 *.spec
 *.spec.bak
