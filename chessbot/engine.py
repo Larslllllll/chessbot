@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import platform as _platform
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
@@ -8,63 +10,92 @@ import time as _time
 import chess
 import chess.polyglot
 
-_STOCKFISH_URL = (
-    "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
-    "stockfish-windows-x86-64-avx2.zip"
-)
 _LOCAL_ENGINE_DIR = Path(__file__).parent.parent / "engine"
+
+
+def _stockfish_url() -> str:
+    machine = _platform.machine().lower()
+    if sys.platform == "win32":
+        return (
+            "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
+            "stockfish-windows-x86-64-avx2.zip"
+        )
+    if sys.platform == "darwin":
+        if "arm" in machine:
+            return (
+                "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
+                "stockfish-macos-m1-apple-silicon.tar"
+            )
+        return (
+            "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
+            "stockfish-macos-x86-64-modern.tar"
+        )
+    # Linux / other Unix
+    if "aarch64" in machine or ("arm" in machine and "64" in machine):
+        return (
+            "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
+            "stockfish-ubuntu-aarch64.tar"
+        )
+    return (
+        "https://github.com/official-stockfish/Stockfish/releases/latest/download/"
+        "stockfish-ubuntu-x86-64-avx2.tar"
+    )
 
 
 # ── Stockfish auto-discovery ──────────────────────────────────────────────────
 
 def find_stockfish() -> str | None:
-    import glob
-
     # 1. Lokal heruntergeladene Version (engine/ neben der exe)
-    for hit in sorted(_LOCAL_ENGINE_DIR.glob("stockfish*.exe"), reverse=True):
-        return str(hit)
+    if _LOCAL_ENGINE_DIR.exists():
+        for hit in sorted(_LOCAL_ENGINE_DIR.glob("stockfish*"), reverse=True):
+            if hit.is_file() and hit.stat().st_size > 0:
+                return str(hit)
 
     # 2. PATH
     sf = shutil.which("stockfish")
     if sf:
         return sf
 
-    # 3. WinGet portable install
-    winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
-    winget_hits = sorted(winget_base.glob("Stockfish.Stockfish_*/stockfish/stockfish*.exe"), reverse=True)
-    if winget_hits:
-        return str(winget_hits[0])
-
-    search_dirs = [
-        "C:/Program Files/Stockfish",
-        "C:/Program Files (x86)/Stockfish",
-        "C:/stockfish",
-        str(Path(__file__).parent.parent),
-        str(Path(__file__).parent.parent / "stockfish"),
-        str(Path(__file__).parent.parent / "StockFish" / "stockfish"),
-    ]
-    for d in search_dirs:
-        for hit in sorted(glob.glob(f"{d}/stockfish*.exe"), reverse=True):
-            return hit
+    # 3. Windows-specific locations
+    if sys.platform == "win32":
+        import glob
+        winget_base = Path.home() / "AppData/Local/Microsoft/WinGet/Packages"
+        winget_hits = sorted(
+            winget_base.glob("Stockfish.Stockfish_*/stockfish/stockfish*.exe"),
+            reverse=True,
+        )
+        if winget_hits:
+            return str(winget_hits[0])
+        for d in [
+            "C:/Program Files/Stockfish",
+            "C:/Program Files (x86)/Stockfish",
+            "C:/stockfish",
+            str(Path(__file__).parent.parent),
+            str(Path(__file__).parent.parent / "stockfish"),
+            str(Path(__file__).parent.parent / "StockFish" / "stockfish"),
+        ]:
+            for hit in sorted(glob.glob(f"{d}/stockfish*.exe"), reverse=True):
+                return hit
 
     return None
 
 
 def ensure_stockfish() -> str | None:
-    """Gibt den Stockfish-Pfad zurück. Lädt die Engine beim ersten Aufruf herunter."""
+    """Returns Stockfish path, downloading the engine on first run."""
     path = find_stockfish()
     if path:
         return path
 
     import io
+    import os
     import urllib.request
-    import zipfile
 
+    url = _stockfish_url()
     print("Stockfish nicht gefunden – wird heruntergeladen ...")
-    print(f"Quelle: {_STOCKFISH_URL}")
+    print(f"Quelle: {url}")
 
     try:
-        with urllib.request.urlopen(_STOCKFISH_URL, timeout=60) as resp:
+        with urllib.request.urlopen(url, timeout=60) as resp:
             total = int(resp.headers.get("Content-Length", 0))
             data = bytearray()
             chunk = 1 << 16
@@ -82,16 +113,36 @@ def ensure_stockfish() -> str | None:
         return None
 
     _LOCAL_ENGINE_DIR.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        for member in zf.namelist():
-            name = Path(member).name
-            if name.startswith("stockfish") and name.endswith(".exe"):
-                dest = _LOCAL_ENGINE_DIR / name
-                dest.write_bytes(zf.read(member))
-                print(f"Stockfish installiert: {dest}")
-                return str(dest)
 
-    print("Fehler: Kein stockfish*.exe im Archiv gefunden.")
+    if sys.platform == "win32":
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            for member in zf.namelist():
+                name = Path(member).name
+                if name.startswith("stockfish") and name.endswith(".exe"):
+                    dest = _LOCAL_ENGINE_DIR / name
+                    dest.write_bytes(zf.read(member))
+                    print(f"Stockfish installiert: {dest}")
+                    return str(dest)
+        print("Fehler: Kein stockfish*.exe im Archiv gefunden.")
+    else:
+        import tarfile
+        with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+            for member in tf.getmembers():
+                if not member.isfile():
+                    continue
+                name = Path(member.name).name
+                if name.startswith("stockfish") and "." not in name:
+                    f = tf.extractfile(member)
+                    if f is None:
+                        continue
+                    dest = _LOCAL_ENGINE_DIR / name
+                    dest.write_bytes(f.read())
+                    os.chmod(dest, 0o755)
+                    print(f"Stockfish installiert: {dest}")
+                    return str(dest)
+        print("Fehler: Kein stockfish-Binary im Archiv gefunden.")
+
     return None
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import sys
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -47,7 +48,14 @@ async def _ask_url() -> str:
 
 
 async def _launch_browser(pw, profile_dir: str):
-    for channel in ("chrome", "msedge"):
+    if sys.platform == "win32":
+        channels = ["chrome", "msedge"]
+    elif sys.platform == "darwin":
+        channels = ["chrome"]
+    else:
+        channels = ["chrome", "chromium"]
+
+    for channel in channels:
         try:
             ctx = await pw.chromium.launch_persistent_context(
                 profile_dir,
@@ -60,7 +68,19 @@ async def _launch_browser(pw, profile_dir: str):
             return ctx
         except Exception as exc:
             print(f"[bot] {channel} not available: {exc}")
-    raise RuntimeError("Neither Chrome nor Edge found.")
+
+    # Fallback: bundled Playwright Chromium
+    try:
+        ctx = await pw.chromium.launch_persistent_context(
+            profile_dir,
+            headless=False,
+            viewport={"width": 1280, "height": 900},
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        print("[bot] Browser: playwright chromium")
+        return ctx
+    except Exception as exc:
+        raise RuntimeError(f"No browser found: {exc}") from exc
 
 
 async def _play_game(page, url: str, depth: int, time_limit: float) -> None:
@@ -86,9 +106,15 @@ async def _run(depth: int, time_limit: float) -> None:
     if sf:
         print(f"  Engine : Stockfish  ({sf})")
     else:
+        if sys.platform == "win32":
+            install_hint = "winget install Stockfish.Stockfish"
+        elif sys.platform == "darwin":
+            install_hint = "brew install stockfish"
+        else:
+            install_hint = "sudo apt install stockfish"
         print(f"  Engine : built-in Python engine (depth {depth})")
         print("  Tip    : install Stockfish for 2000+ ELO play")
-        print("           winget install Stockfish.Stockfish")
+        print(f"           {install_hint}")
     print(f"  Time   : {time_limit:.0f}s per move")
 
     async with async_playwright() as pw:

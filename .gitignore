@@ -10,12 +10,14 @@ playwright-report/
 # Build artifacts
 dist/chessbot/
 dist/install_browser.exe
+dist/install_browser
 build/
-*.spec
-*.spec.bak
-build.ps1
-installer.iss
-install_browser.py
+# Only ignore spec/build files at root level, not in platform subdirs
+/*.spec
+/*.spec.bak
+/build.ps1
+/installer.iss
+/install_browser.py
 
 # Tests
 tests/
