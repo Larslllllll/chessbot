@@ -406,25 +406,40 @@ class DuolingoChessBot:
         return move.uci(), score_before, score_after
 
 
-    async def run_loop(self, depth: int = 8, time_limit: float = 0.5) -> None:
+    async def run_loop(
+        self,
+        depth: int = 8,
+        time_limit: float = 0.5,
+        stop_event=None,
+        callbacks: dict | None = None,
+    ) -> None:
         print("[bot] Game loop started — press Ctrl+C to stop.")
         print("[bot] Waiting for canvas to become interactive…")
         await self._wait_for_canvas_interactive(timeout=30)
         print("[bot] Canvas ready.")
+
+        callbacks = callbacks or {}
+        on_board = callbacks.get("on_board")
+        on_move  = callbacks.get("on_move")
+
         last_played_fen: str | None = None
+        last_known_fen:  str | None = None
         s_after_last: int | None = None
         our_cpls: list[int] = []
         opp_cpls: list[int] = []
+        bot_move_no = 0
 
         while True:
             try:
-                # Network listener fires _game_over immediately on resignation/abandonment
+                if stop_event and stop_event.is_set():
+                    print("[bot] Stop requested.")
+                    break
+
                 if self._game_over:
                     print("[bot] Game over (network event) — stopping.")
                     _print_game_stats(our_cpls, opp_cpls)
                     break
 
-                # Consume _live_state once so stale cache doesn't loop forever
                 state = self._live_state
                 self._live_state = None
                 if state is None:
@@ -465,29 +480,53 @@ class DuolingoChessBot:
                 current_fen = b.fen()
                 print(f"[bot] moves={len(history)}  turn={'w' if b.turn == chess.WHITE else 'b'}  my_color={self._orientation}")
 
+                # Board update when opponent moved
+                if on_board and current_fen != last_known_fen:
+                    last_hist_uci = str(history[-1]) if history else None
+                    on_board(current_fen, last_hist_uci, my_color)
+                    last_known_fen = current_fen
+
                 if b.turn == my_color and current_fen != last_played_fen:
                     uci, score_before, s_after = await self.play_best_move_from_board(b, depth=depth, time_limit=time_limit)
 
-                    # Opponent CPL: how much did their last move cost them?
+                    cpl_opp_val: int | None = None
+                    cpl_us_val:  int | None = None
+
                     if s_after_last is not None and score_before is not None:
                         cpl_opp = min(500, max(0, s_after_last + score_before))
                         opp_cpls.append(cpl_opp)
+                        cpl_opp_val = cpl_opp
                         acpl_opp = sum(opp_cpls) / len(opp_cpls)
                         print(
                             f"[bot] Opponent : {_cpl_label(cpl_opp)} (CPL {cpl_opp:+d})"
                             f"  ACPL {acpl_opp:.0f}  Est.ELO ~{_elo_from_acpl(acpl_opp)}"
                         )
 
-                    # Our CPL: score_after already computed inside _sf_think
                     if score_before is not None and s_after is not None:
                         cpl_us = min(500, max(0, score_before + s_after))
                         our_cpls.append(cpl_us)
+                        cpl_us_val = cpl_us
                         acpl_us = sum(our_cpls) / len(our_cpls)
                         print(
                             f"[bot] Us (bot)  : {_cpl_label(cpl_us)} (CPL {cpl_us:+d})"
                             f"  ACPL {acpl_us:.0f}  Est.ELO ~{_elo_from_acpl(acpl_us)}"
                         )
+
                     s_after_last = s_after
+
+                    # Board update after bot's move
+                    if on_board:
+                        b_after = b.copy()
+                        try:
+                            b_after.push(chess.Move.from_uci(uci))
+                            on_board(b_after.fen(), uci, my_color)
+                            last_known_fen = b_after.fen()
+                        except Exception:
+                            pass
+
+                    if on_move:
+                        bot_move_no += 1
+                        on_move(bot_move_no, uci, cpl_us_val, cpl_opp_val)
 
                     last_played_fen = current_fen
                 else:
@@ -639,46 +678,88 @@ class ChessComBot:
         self._last_played_fen = b.fen()
         return move.uci(), score_before, score_after
 
-    async def run_loop(self, depth: int = 8, time_limit: float = 0.5) -> None:
+    async def run_loop(
+        self,
+        depth: int = 8,
+        time_limit: float = 0.5,
+        stop_event=None,
+        callbacks: dict | None = None,
+    ) -> None:
         print("[bot] Game loop started — press Ctrl+C to stop.")
+
+        callbacks = callbacks or {}
+        on_board = callbacks.get("on_board")
+        on_move  = callbacks.get("on_move")
+
         s_after_last: int | None = None
         our_cpls: list[int] = []
         opp_cpls: list[int] = []
+        last_known_fen: str | None = None
+        bot_move_no = 0
+        my_color = chess.WHITE if self._my_color == "white" else chess.BLACK
 
         while True:
             try:
+                if stop_event and stop_event.is_set():
+                    print("[bot] Stop requested.")
+                    break
+
                 if not await self.is_my_turn():
+                    # Board update when waiting for opponent
+                    fen = await self.inspect_board()
+                    if on_board and fen != last_known_fen:
+                        on_board(fen, None, my_color)
+                        last_known_fen = fen
                     await asyncio.sleep(0.1)
                     continue
+
                 fen = await self.inspect_board()
                 b = chess.Board(fen)
                 if b.is_game_over():
                     print(f"[bot] Game over: {b.result()}")
                     _print_game_stats(our_cpls, opp_cpls)
                     break
+
                 if fen != self._last_played_fen:
                     uci, score_before, s_after = await self.play_best_move(b, depth=depth, time_limit=time_limit)
 
-                    # Opponent CPL: how much did their last move cost them?
+                    cpl_opp_val: int | None = None
+                    cpl_us_val:  int | None = None
+
                     if s_after_last is not None and score_before is not None:
                         cpl_opp = min(500, max(0, s_after_last + score_before))
                         opp_cpls.append(cpl_opp)
+                        cpl_opp_val = cpl_opp
                         acpl_opp = sum(opp_cpls) / len(opp_cpls)
                         print(
                             f"[bot] Opponent : {_cpl_label(cpl_opp)} (CPL {cpl_opp:+d})"
                             f"  ACPL {acpl_opp:.0f}  Est.ELO ~{_elo_from_acpl(acpl_opp)}"
                         )
 
-                    # Our CPL: score_after already computed inside _sf_think
                     if score_before is not None and s_after is not None:
                         cpl_us = min(500, max(0, score_before + s_after))
                         our_cpls.append(cpl_us)
+                        cpl_us_val = cpl_us
                         acpl_us = sum(our_cpls) / len(our_cpls)
                         print(
                             f"[bot] Us (bot)  : {_cpl_label(cpl_us)} (CPL {cpl_us:+d})"
                             f"  ACPL {acpl_us:.0f}  Est.ELO ~{_elo_from_acpl(acpl_us)}"
                         )
                     s_after_last = s_after
+
+                    # Board update after bot's move
+                    if on_board:
+                        b_after = b.copy()
+                        try:
+                            b_after.push(chess.Move.from_uci(uci))
+                            on_board(b_after.fen(), uci, my_color)
+                            last_known_fen = b_after.fen()
+                        except Exception:
+                            pass
+
+                    if on_move:
+                        bot_move_no += 1
+                        on_move(bot_move_no, uci, cpl_us_val, cpl_opp_val)
                 else:
                     await asyncio.sleep(0.5)
             except KeyboardInterrupt:

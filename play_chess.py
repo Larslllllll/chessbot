@@ -83,17 +83,69 @@ async def _launch_browser(pw, profile_dir: str):
         raise RuntimeError(f"No browser found: {exc}") from exc
 
 
-async def _play_game(page, url: str, depth: int, time_limit: float) -> None:
+async def _play_game(
+    page,
+    url: str,
+    depth: int,
+    time_limit: float,
+    stop_event=None,
+    callbacks: dict | None = None,
+    wait_for_input: bool = True,
+) -> None:
     await page.goto(url, wait_until="domcontentloaded")
-    print("\n[bot] Log in and start a chess game.")
-    print("[bot] Press ENTER when ready...")
-    await asyncio.get_event_loop().run_in_executor(None, input)
+    if wait_for_input:
+        print("\n[bot] Log in and start a chess game.")
+        print("[bot] Press ENTER when ready...")
+        await asyncio.get_event_loop().run_in_executor(None, input)
+    else:
+        print("[bot] Browser geöffnet — melde dich an und starte ein Spiel.")
 
     bot: DuolingoChessBot | ChessComBot = (
         ChessComBot(page) if "chess.com" in url else DuolingoChessBot(page)
     )
     await bot.wait_until_ready()
-    await bot.run_loop(depth=depth, time_limit=time_limit)
+    await bot.run_loop(
+        depth=depth,
+        time_limit=time_limit,
+        stop_event=stop_event,
+        callbacks=callbacks,
+    )
+
+
+async def run_bot(
+    url: str,
+    depth: int,
+    time_limit: float,
+    stop_event,
+    callbacks: dict,
+) -> None:
+    """GUI entry point — runs the bot without interactive menus."""
+    profile_dir = str(Path(__file__).parent / "browser-profile")
+    on_status = callbacks.get("on_status")
+
+    sf = ensure_stockfish()
+    if sf:
+        print(f"[Engine] Stockfish: {sf}")
+    else:
+        print(f"[Engine] Built-in engine (Tiefe {depth})")
+
+    if on_status:
+        on_status("Browser startet…")
+
+    async with async_playwright() as pw:
+        ctx = await _launch_browser(pw, profile_dir)
+        page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+        if on_status:
+            on_status("Warte auf Spiel…")
+        await _play_game(
+            page, url, depth, time_limit,
+            stop_event=stop_event,
+            callbacks=callbacks,
+            wait_for_input=False,
+        )
+        if on_status:
+            on_status("Fertig")
+        await ctx.close()
 
 
 async def _run(depth: int, time_limit: float) -> None:
