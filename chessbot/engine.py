@@ -10,7 +10,11 @@ import time as _time
 import chess
 import chess.polyglot
 
-_LOCAL_ENGINE_DIR = Path(__file__).parent.parent / "engine"
+if getattr(sys, "frozen", False):
+    # PyInstaller bundle: engine/ sits next to the executable
+    _LOCAL_ENGINE_DIR = Path(sys.executable).parent / "engine"
+else:
+    _LOCAL_ENGINE_DIR = Path(__file__).parent.parent / "engine"
 
 
 def _stockfish_url() -> str:

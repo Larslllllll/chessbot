@@ -8,7 +8,7 @@ OutputBaseFilename=chessbot-setup
 OutputDir={#SourcePath}\..\dist\installer
 Compression=lzma
 SolidCompression=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Files]
