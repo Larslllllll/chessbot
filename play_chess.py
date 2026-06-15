@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -149,7 +150,12 @@ async def run_bot(
 
 
 async def _run(depth: int, time_limit: float) -> None:
-    profile_dir = str(Path(__file__).parent / "browser-profile")
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle: __file__ is inside _internal/ inside Program Files.
+        # Writing there requires admin on every launch — use LOCALAPPDATA instead.
+        profile_dir = str(Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Chessbot" / "browser-profile")
+    else:
+        profile_dir = str(Path(__file__).parent / "browser-profile")
 
     print("\n╔══════════════════════╗")
     print("║     Chess Bot CLI    ║")
