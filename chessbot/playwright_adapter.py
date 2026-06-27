@@ -22,6 +22,44 @@ _GAME_OVER_STATUSES: frozenset[str] = frozenset({
     "ABANDONED", "FORFEITED", "EXPIRED", "COMPLETE", "ENDED",
 })
 
+
+def _normalize_label(text: str | None) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip()).lower()
+
+
+def _looks_like_restart_action(text: str | None) -> bool:
+    normalized = _normalize_label(text)
+    if not normalized:
+        return False
+    return any(
+        token in normalized
+        for token in ("play again", "rematch", "new game", "new match", "restart")
+    )
+
+
+async def _click_restart_action(page: Page) -> bool:
+    return bool(await page.evaluate("""
+        () => {
+            const labels = ['play again', 'rematch', 'new game', 'new match', 'restart'];
+            const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+            for (const el of candidates) {
+                const text = [
+                    el.innerText,
+                    el.textContent,
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('title'),
+                    el.getAttribute('data-testid'),
+                ].filter(Boolean).join(' ').toLowerCase();
+                if (labels.some(label => text.includes(label))) {
+                    el.click();
+                    return true;
+                }
+            }
+            return false;
+        }
+    """))
+
+
 # ── Stockfish: fresh process per move (no shared state, no pipe corruption) ────
 
 _sf_path: str | None = find_stockfish()
@@ -412,6 +450,7 @@ class DuolingoChessBot:
         time_limit: float = 0.5,
         stop_event=None,
         callbacks: dict | None = None,
+        xp_farm: bool = False,
     ) -> None:
         print("[bot] Game loop started — press Ctrl+C to stop.")
         print("[bot] Waiting for canvas to become interactive…")
@@ -436,8 +475,18 @@ class DuolingoChessBot:
                     break
 
                 if self._game_over:
-                    print("[bot] Game over (network event) — stopping.")
+                    print("[bot] Game over (network event).")
                     _print_game_stats(our_cpls, opp_cpls)
+                    if xp_farm:
+                        await asyncio.sleep(1.5)
+                        if await _click_restart_action(self._page):
+                            print("[bot] Restart action clicked — starting next game.")
+                            self._game_over = False
+                            self._live_state = None
+                            last_played_fen = None
+                            last_known_fen = None
+                            await asyncio.sleep(2)
+                            continue
                     break
 
                 state = self._live_state
@@ -474,6 +523,16 @@ class DuolingoChessBot:
                 if b.is_game_over() or status in _GAME_OVER_STATUSES:
                     print(f"[bot] Game over — {b.result() or status}")
                     _print_game_stats(our_cpls, opp_cpls)
+                    if xp_farm:
+                        await asyncio.sleep(1.5)
+                        if await _click_restart_action(self._page):
+                            print("[bot] Restart action clicked — starting next game.")
+                            last_played_fen = None
+                            last_known_fen = None
+                            self._game_over = False
+                            self._live_state = None
+                            await asyncio.sleep(2)
+                            continue
                     break
 
                 my_color = chess.WHITE if self._orientation == "white" else chess.BLACK
@@ -684,6 +743,7 @@ class ChessComBot:
         time_limit: float = 0.5,
         stop_event=None,
         callbacks: dict | None = None,
+        xp_farm: bool = False,
     ) -> None:
         print("[bot] Game loop started — press Ctrl+C to stop.")
 
@@ -718,6 +778,14 @@ class ChessComBot:
                 if b.is_game_over():
                     print(f"[bot] Game over: {b.result()}")
                     _print_game_stats(our_cpls, opp_cpls)
+                    if xp_farm:
+                        await asyncio.sleep(1.5)
+                        if await _click_restart_action(self._page):
+                            print("[bot] Restart action clicked — starting next game.")
+                            self._last_played_fen = ""
+                            last_known_fen = None
+                            await asyncio.sleep(2)
+                            continue
                     break
 
                 if fen != self._last_played_fen:

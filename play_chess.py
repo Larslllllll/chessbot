@@ -92,6 +92,7 @@ async def _play_game(
     stop_event=None,
     callbacks: dict | None = None,
     wait_for_input: bool = True,
+    xp_farm: bool = False,
 ) -> None:
     await page.goto(url, wait_until="domcontentloaded")
     if wait_for_input:
@@ -110,6 +111,7 @@ async def _play_game(
         time_limit=time_limit,
         stop_event=stop_event,
         callbacks=callbacks,
+        xp_farm=xp_farm,
     )
 
 
@@ -119,6 +121,7 @@ async def run_bot(
     time_limit: float,
     stop_event,
     callbacks: dict,
+    xp_farm: bool = False,
 ) -> None:
     """GUI entry point — runs the bot without interactive menus."""
     profile_dir = str(Path(__file__).parent / "browser-profile")
@@ -143,13 +146,14 @@ async def run_bot(
             stop_event=stop_event,
             callbacks=callbacks,
             wait_for_input=False,
+            xp_farm=xp_farm,
         )
         if on_status:
             on_status("Fertig")
         await ctx.close()
 
 
-async def _run(depth: int, time_limit: float) -> None:
+async def _run(depth: int, time_limit: float, xp_farm: bool = False) -> None:
     if getattr(sys, "frozen", False):
         # PyInstaller bundle: __file__ is inside _internal/ inside Program Files.
         # Writing there requires admin on every launch — use LOCALAPPDATA instead.
@@ -174,6 +178,7 @@ async def _run(depth: int, time_limit: float) -> None:
         print("  Tip    : install Stockfish for 2000+ ELO play")
         print(f"           {install_hint}")
     print(f"  Time   : {time_limit:.0f}s per move")
+    print(f"  XP farm: {'on' if xp_farm else 'off'}")
 
     async with async_playwright() as pw:
         ctx = None
@@ -193,7 +198,7 @@ async def _run(depth: int, time_limit: float) -> None:
             while True:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 try:
-                    await _play_game(page, url, depth, time_limit)
+                    await _play_game(page, url, depth, time_limit, xp_farm=xp_farm)
                 except KeyboardInterrupt:
                     print("\n[bot] Interrupted.")
 
@@ -224,8 +229,12 @@ def main() -> None:
         "--time", type=float, default=0.5,
         help="Seconds to think per move (default: %(default)s).",
     )
+    parser.add_argument(
+        "--xp-farm", action="store_true",
+        help="Auto-click restart/rematch after a finished game so the bot keeps farming XP.",
+    )
     args = parser.parse_args()
-    asyncio.run(_run(args.depth, args.time))
+    asyncio.run(_run(args.depth, args.time, args.xp_farm))
 
 
 if __name__ == "__main__":

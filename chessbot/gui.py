@@ -13,7 +13,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
-    QApplication, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QSplitter, QTableWidget,
     QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
@@ -346,11 +346,12 @@ class BotWorker(QThread):
     sig_status   = pyqtSignal(str)
     sig_finished = pyqtSignal()
 
-    def __init__(self, url: str, depth: int, time_limit: float) -> None:
+    def __init__(self, url: str, depth: int, time_limit: float, xp_farm: bool = False) -> None:
         super().__init__()
         self.url = url
         self.depth = depth
         self.time_limit = time_limit
+        self.xp_farm = xp_farm
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop: asyncio.Event | None = None
 
@@ -393,7 +394,7 @@ class BotWorker(QThread):
             "on_move":   _on_move,
             "on_status": lambda s: self.sig_status.emit(s),
         }
-        await run_bot(self.url, self.depth, self.time_limit, self._stop, callbacks)
+        await run_bot(self.url, self.depth, self.time_limit, self._stop, callbacks, xp_farm=self.xp_farm)
 
     def stop(self) -> None:
         if self._loop and self._stop and not self._loop.is_closed():
@@ -470,6 +471,10 @@ class MainWindow(QMainWindow):
         row_params.addWidget(self._time)
         row_params.addStretch()
         cl.addLayout(row_params)
+
+        self._xp_farm = QCheckBox("XP farm / Auto-Rematch")
+        self._xp_farm.setChecked(False)
+        cl.addWidget(self._xp_farm)
 
         rl.addWidget(grp_cfg)
 
@@ -567,7 +572,7 @@ class MainWindow(QMainWindow):
 
         depth = self._depth.value()
         t = self._time.value()
-        self._worker = BotWorker(url, depth, t)
+        self._worker = BotWorker(url, depth, t, xp_farm=self._xp_farm.isChecked())
         self._worker.sig_log.connect(self._append_log)
         self._worker.sig_board.connect(self._on_board)
         self._worker.sig_move.connect(self._on_move)
